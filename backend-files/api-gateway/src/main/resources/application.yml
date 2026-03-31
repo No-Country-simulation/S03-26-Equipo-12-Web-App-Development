@@ -1,0 +1,67 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  cloud:
+    gateway:
+      routes:
+
+        - id: auth-service
+          uri: http://${AUTH_SERVICE_HOST:localhost}:8081
+          predicates:
+            - Path=/api/auth/**
+
+        - id: testimonial-service
+          uri: http://${TESTIMONIAL_SERVICE_HOST:localhost}:8082
+          predicates:
+            - Path=/api/testimonials/**, /api/categories/**, /api/tags/**
+
+        - id: media-service
+          uri: http://${MEDIA_SERVICE_HOST:localhost}:8083
+          predicates:
+            - Path=/api/media/**
+
+        - id: search-service
+          uri: http://${SEARCH_SERVICE_HOST:localhost}:8084
+          predicates:
+            - Path=/api/search/**
+
+        - id: analytics-service
+          uri: http://${ANALYTICS_SERVICE_HOST:localhost}:8085
+          predicates:
+            - Path=/api/analytics/**
+
+        - id: embed-service
+          uri: http://${EMBED_SERVICE_HOST:localhost}:8086
+          predicates:
+            - Path=/api/embed/**, /public/**
+
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins:
+              - "http://localhost:4200"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - PATCH
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
+            allowCredentials: true
+            maxAge: 3600
+
+jwt:
+  secret: ${JWT_SECRET:dev-secret-key-must-be-at-least-256-bits-long-replace-in-production}
+
+logging:
+  level:
+    org.springframework.cloud.gateway: DEBUG
+    com.testimonialcms.gateway: DEBUG

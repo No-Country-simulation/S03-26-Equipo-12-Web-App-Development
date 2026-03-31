@@ -1,0 +1,220 @@
+version: '3.9'
+
+services:
+
+  # ── Infraestructura ──────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tcms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       testimonial_cms
+      POSTGRES_USER:     ${DB_USER:-cms_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-cms_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-cms_user} -d testimonial_cms"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: tcms-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: tcms-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      retries: 5
+
+  elasticsearch:
+    image: elasticsearch:8.13.0
+    container_name: tcms-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q 'green\\|yellow'"]
+      interval: 20s
+      retries: 5
+
+  # ── Servicios ─────────────────────────────────────────────────
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: tcms-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      JWT_SECRET:              ${JWT_SECRET}
+      REDIS_HOST:              redis
+      AUTH_SERVICE_HOST:       auth-service
+      TESTIMONIAL_SERVICE_HOST: testimonial-service
+      MEDIA_SERVICE_HOST:      media-service
+      SEARCH_SERVICE_HOST:     search-service
+      ANALYTICS_SERVICE_HOST:  analytics-service
+      EMBED_SERVICE_HOST:      embed-service
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - tcms-network
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    container_name: tcms-auth
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      DB_URL:      jdbc:postgresql://postgres:5432/testimonial_cms
+      DB_USER:     ${DB_USER:-cms_user}
+      DB_PASSWORD: ${DB_PASSWORD:-cms_pass}
+      REDIS_HOST:  redis
+      JWT_SECRET:  ${JWT_SECRET}
+      JWT_EXPIRATION_MS:      ${JWT_EXPIRATION_MS:-86400000}
+      JWT_REFRESH_DAYS:       ${JWT_REFRESH_DAYS:-7}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tcms-network
+
+  testimonial-service:
+    build:
+      context: ./services/testimonial-service
+      dockerfile: Dockerfile
+    container_name: tcms-testimonial
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      DB_URL:          jdbc:postgresql://postgres:5432/testimonial_cms
+      DB_USER:         ${DB_USER:-cms_user}
+      DB_PASSWORD:     ${DB_PASSWORD:-cms_pass}
+      RABBITMQ_HOST:   rabbitmq
+      RABBITMQ_USER:   ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS:   ${RABBITMQ_PASS:-guest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tcms-network
+
+  media-service:
+    build:
+      context: ./services/media-service
+      dockerfile: Dockerfile
+    container_name: tcms-media
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      DB_URL:                  jdbc:postgresql://postgres:5432/testimonial_cms
+      DB_USER:                 ${DB_USER:-cms_user}
+      DB_PASSWORD:             ${DB_PASSWORD:-cms_pass}
+      CLOUDINARY_CLOUD_NAME:   ${CLOUDINARY_CLOUD_NAME}
+      CLOUDINARY_API_KEY:      ${CLOUDINARY_API_KEY}
+      CLOUDINARY_API_SECRET:   ${CLOUDINARY_API_SECRET}
+      YOUTUBE_API_KEY:         ${YOUTUBE_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - tcms-network
+
+  analytics-service:
+    build:
+      context: ./services/analytics-service
+      dockerfile: Dockerfile
+    container_name: tcms-analytics
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      DB_URL:        jdbc:postgresql://postgres:5432/testimonial_cms
+      DB_USER:       ${DB_USER:-cms_user}
+      DB_PASSWORD:   ${DB_PASSWORD:-cms_pass}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASS: ${RABBITMQ_PASS:-guest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tcms-network
+
+  embed-service:
+    build:
+      context: ./services/embed-service
+      dockerfile: Dockerfile
+    container_name: tcms-embed
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      DB_URL:                  jdbc:postgresql://postgres:5432/testimonial_cms
+      DB_USER:                 ${DB_USER:-cms_user}
+      DB_PASSWORD:             ${DB_PASSWORD:-cms_pass}
+      REDIS_HOST:              redis
+      TESTIMONIAL_SERVICE_URL: http://testimonial-service:8082
+      EMBED_BASE_URL:          http://localhost:8086
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - tcms-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  es_data:
+
+networks:
+  tcms-network:
+    driver: bridge
